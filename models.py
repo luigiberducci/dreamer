@@ -154,23 +154,38 @@ class ActionDecoder(tools.Module):
     self._mean_scale = mean_scale
 
   def __call__(self, features):
-    raw_init_std = np.log(np.exp(self._init_std) - 1)
-    x = features
-    for index in range(self._layers):
-      x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
-    if self._dist == 'tanh_normal':
-      # https://www.desmos.com/calculator/rcmcf5jwe7
+    if self._dist in ['tanh_normal', 'onehot']:
+      raw_init_std = np.log(np.exp(self._init_std) - 1)
+      x = features
+      for index in range(self._layers):
+        x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
+      if self._dist == 'tanh_normal':
+        # https://www.desmos.com/calculator/rcmcf5jwe7
+        x = self.get(f'hout', tfkl.Dense, 2 * self._size)(x)
+        mean, std = tf.split(x, 2, -1)
+        mean = self._mean_scale * tf.tanh(mean / self._mean_scale)
+        std = tf.nn.softplus(std + raw_init_std) + self._min_std
+        dist = tfd.Normal(mean, std)
+        dist = tfd.TransformedDistribution(dist, tools.TanhBijector())
+        dist = tfd.Independent(dist, 1)
+        dist = tools.SampleDist(dist)
+      elif self._dist == 'onehot':
+        x = self.get(f'hout', tfkl.Dense, self._size)(x)
+        dist = tools.OneHotDist(x)
+    elif self._dist == "norm_policy":
+      # this network try to reproduce the mpo's policy net in acme
+      x = features
+      # LayerNormMLP with tanh regularization
+      x = self.get(f'h0', tfkl.Dense, self._units, None)(x)
+      x = self.get(f'hnorm', tfkl.LayerNormalization, axis=-1)(x)
+      x = tf.tanh(x)  # regularize normalization output through tanh
+      for index in range(1, self._layers):
+        x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
+      # multivariate normal distribution
       x = self.get(f'hout', tfkl.Dense, 2 * self._size)(x)
       mean, std = tf.split(x, 2, -1)
-      mean = self._mean_scale * tf.tanh(mean / self._mean_scale)
-      std = tf.nn.softplus(std + raw_init_std) + self._min_std
-      dist = tfd.Normal(mean, std)
-      dist = tfd.TransformedDistribution(dist, tools.TanhBijector())
-      dist = tfd.Independent(dist, 1)
-      dist = tools.SampleDist(dist)
-    elif self._dist == 'onehot':
-      x = self.get(f'hout', tfkl.Dense, self._size)(x)
-      dist = tools.OneHotDist(x)
+      std = tf.softplus(std) + self._min_std
+      dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
     else:
-      raise NotImplementedError(dist)
+      raise NotImplementedError(self._dist)
     return dist
