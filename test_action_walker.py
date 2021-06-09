@@ -6,6 +6,9 @@ import wrappers
 from dreamer import Dreamer, define_config
 import argparse
 import gym
+import tensorflow as tf
+
+#tf.config.run_functions_eagerly(True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--logdir", type=pathlib.Path, required=True)
