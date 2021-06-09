@@ -177,14 +177,16 @@ class ActionDecoder(tools.Module):
       x = features
       # LayerNormMLP with tanh regularization
       x = self.get(f'h0', tfkl.Dense, self._units, None)(x)
-      x = self.get(f'hnorm', tfkl.LayerNormalization, axis=-1)(x)
+      x = tf.reshape(x, [-1, tf.shape(x)[-1]])
+      x = self.get(f'hnorm', tfkl.LayerNormalization)(x)
+      x = tf.reshape(x, tf.concat([tf.shape(features)[:-1], [-1]], 0))
       x = tf.tanh(x)  # regularize normalization output through tanh
       for index in range(1, self._layers):
         x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
       # multivariate normal distribution
       x = self.get(f'hout', tfkl.Dense, 2 * self._size)(x)
       mean, std = tf.split(x, 2, -1)
-      std = tf.softplus(std) + self._min_std
+      std = tf.nn.softplus(std) + self._min_std
       dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
     else:
       raise NotImplementedError(self._dist)

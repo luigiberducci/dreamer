@@ -6,6 +6,9 @@ import os
 import pathlib
 import sys
 import time
+import tensorflow as tf
+
+#tf.config.run_functions_eagerly(True)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['MUJOCO_GL'] = 'egl'
