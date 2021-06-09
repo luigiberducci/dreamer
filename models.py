@@ -174,6 +174,7 @@ class ActionDecoder(tools.Module):
         dist = tools.OneHotDist(x)
     elif self._dist == "norm_policy":
       # this network try to reproduce the mpo's policy net in acme
+      # result: flat learning curve, no learning at all
       x = features
       # LayerNormMLP with tanh regularization
       x = self.get(f'h0', tfkl.Dense, self._units, None)(x)
@@ -184,6 +185,15 @@ class ActionDecoder(tools.Module):
       for index in range(1, self._layers):
         x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
       # multivariate normal distribution
+      x = self.get(f'hout', tfkl.Dense, 2 * self._size)(x)
+      mean, std = tf.split(x, 2, -1)
+      std = tf.nn.softplus(std) + self._min_std
+      dist = tfd.MultivariateNormalDiag(loc=mean, scale_diag=std)
+    elif self._dist == "diag_policy":
+      # this network try to reproduce the mpo's policy net in acme
+      x = features
+      for index in range(self._layers):
+        x = self.get(f'h{index}', tfkl.Dense, self._units, self._act)(x)
       x = self.get(f'hout', tfkl.Dense, 2 * self._size)(x)
       mean, std = tf.split(x, 2, -1)
       std = tf.nn.softplus(std) + self._min_std

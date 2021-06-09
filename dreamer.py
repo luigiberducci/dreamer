@@ -116,7 +116,7 @@ class Dreamer(tools.Module):
     if state is not None and reset.any():
       mask = tf.cast(1 - reset, self._float)[:, None]
       state = tf.nest.map_structure(lambda x: x * mask, state)
-    if self._should_train(step):
+    if training and self._should_train(step):
       log = self._should_log(step)
       n = self._c.pretrain if self._should_pretrain() else self._c.train_steps
       print(f'Training for {n} steps.')
@@ -149,9 +149,10 @@ class Dreamer(tools.Module):
     state = (latent, action)
     return action, state
 
-  def load(self, filename):
+  def load(self, filename, testing=False):
     super().load(filename)
-    self._should_pretrain()
+    if not testing:
+      self._should_pretrain()
 
   @tf.function()
   def train(self, data, log_images=False):
