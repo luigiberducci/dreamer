@@ -276,8 +276,9 @@ class Dreamer(tools.Module):
       post = {k: v[:, :-1] for k, v in post.items()}
     flatten = lambda x: tf.reshape(x, [-1] + list(x.shape[2:]))
     start = {k: flatten(v) for k, v in post.items()}
-    policy = lambda state: self._actor(
-        tf.stop_gradient(self._dynamics.get_feat(state))).sample()
+    # add action clipping to ensure valid action ranges also in the dreaming phase
+    policy = lambda state: tf.clip_by_value(self._actor(
+        tf.stop_gradient(self._dynamics.get_feat(state))).sample(), -1, 1)
     states = tools.static_scan(
         lambda prev, _: self._dynamics.img_step(prev, policy(prev)),
         tf.range(self._c.horizon), start)
