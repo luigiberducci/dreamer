@@ -45,9 +45,11 @@ agent_state = None
 env.reset()
 env.render()
 
+actions = []
 while not done:
     action, agent_state = agent(obs, done, agent_state)
     action = np.array(action)
+    actions.append(action)
     obs, reward, done, info = env.step(action)
     env.render()
     obs = list(obs)
