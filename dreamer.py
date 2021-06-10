@@ -62,6 +62,8 @@ def define_config():
   config.pcont_scale = 10.0
   config.weight_decay = 0.0
   config.weight_decay_pattern = r'.*'
+  # Action regularization (https://arxiv.org/abs/2012.06644)
+  config.lambda_temporal = 0.0
   # Training.
   config.batch_size = 50
   config.batch_length = 50
@@ -181,7 +183,32 @@ class Dreamer(tools.Module):
       model_loss /= float(self._strategy.num_replicas_in_sync)
 
     with tf.GradientTape() as actor_tape:
-      imag_feat = self._imagine_ahead(post)
+      # Begin Imagination Phase
+      if self._c.pcont:  # Last step could be terminal.
+        post = {k: v[:, :-1] for k, v in post.items()}
+      flatten = lambda x: tf.reshape(x, [-1] + list(x.shape[2:]))
+      start = {k: flatten(v) for k, v in post.items()}
+      # Create lambda functions for action and action+noise
+      policy = lambda state: self._actor(tf.stop_gradient(self._dynamics.get_feat(state))).sample()
+      imagine_step = lambda prev, act: self._dynamics.img_step(prev, act)
+      # Imagination loop
+      states = [[] for _ in tf.nest.flatten(start)]
+      actions, actions_bar = [], []
+      last = start
+      for hstep in range(self._c.horizon):
+        # Compute action
+        action = policy(last)  # action_dist := policy(last)
+        # Predict a step
+        last = imagine_step(last, action)
+        # Append states, actions
+        [s.append(l) for s, l in zip(states, tf.nest.flatten(last))]
+        actions.append(action)
+      # Convert to proper format
+      states = [tf.stack(x, 0) for x in states]
+      states = tf.nest.pack_sequence_as(start, states)
+      # End Imagination Phase
+      imag_feat = self._dynamics.get_feat(states)
+
       reward = self._reward(imag_feat).mode()
       if self._c.pcont:
         pcont = self._pcont(imag_feat).mean()
@@ -193,7 +220,13 @@ class Dreamer(tools.Module):
           bootstrap=value[-1], lambda_=self._c.disclam, axis=0)
       discount = tf.stop_gradient(tf.math.cumprod(tf.concat(
           [tf.ones_like(pcont[:1]), pcont[:-2]], 0), 0))
-      actor_loss = -tf.reduce_mean(discount * returns)
+      # Here: add action regularization for smooth control (https://arxiv.org/abs/2012.06644)
+      actions = tf.stack(actions, 0)  # Convert proper format
+      action_squared_err = tf.pow(actions[1:] - actions[:-1], 2)  # squared error between each action and its succ
+      action_cost = tf.reduce_sum(action_squared_err, -1) # sum error on individual act components
+      unscaled_action_cost = tf.reduce_mean(action_cost)  # only for scalar summary
+      # Compute actor loss
+      actor_loss = -tf.reduce_mean(discount * (returns - self._c.lambda_temporal * action_cost))
       actor_loss /= float(self._strategy.num_replicas_in_sync)
 
     with tf.GradientTape() as value_tape:
@@ -210,7 +243,7 @@ class Dreamer(tools.Module):
       if self._c.log_scalars:
         self._scalar_summaries(
             data, feat, prior_dist, post_dist, likes, div,
-            model_loss, value_loss, actor_loss, model_norm, value_norm,
+            model_loss, value_loss, actor_loss, unscaled_action_cost, model_norm, value_norm,
             actor_norm)
       if tf.equal(log_images, True):
         self._image_summaries(data, embed, image_pred)
@@ -287,7 +320,7 @@ class Dreamer(tools.Module):
 
   def _scalar_summaries(
       self, data, feat, prior_dist, post_dist, likes, div,
-      model_loss, value_loss, actor_loss, model_norm, value_norm,
+      model_loss, value_loss, actor_loss, unscaled_action_cost, model_norm, value_norm,
       actor_norm):
     self._metrics['model_grad_norm'].update_state(model_norm)
     self._metrics['value_grad_norm'].update_state(value_norm)
@@ -300,6 +333,7 @@ class Dreamer(tools.Module):
     self._metrics['model_loss'].update_state(model_loss)
     self._metrics['value_loss'].update_state(value_loss)
     self._metrics['actor_loss'].update_state(actor_loss)
+    self._metrics['unscaled_action_cost'].update_state(unscaled_action_cost)
     self._metrics['action_ent'].update_state(self._actor(feat).entropy())
 
   def _image_summaries(self, data, embed, image_pred):
@@ -410,6 +444,8 @@ def main(config):
   if config.precision == 16:
     prec.set_policy(prec.Policy('mixed_float16'))
   config.steps = int(config.steps)
+
+  config.logdir = config.logdir / f"{config.action_dist}_lambda_t_{config.lambda_temporal}"
   config.logdir.mkdir(parents=True, exist_ok=True)
   print('Logdir', config.logdir)
 
