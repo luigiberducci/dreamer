@@ -22,7 +22,7 @@ import wrappers
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--logdir", type=pathlib.Path, required=True)
-parser.add_argument("--action_dist", type=str, choices=["tanh_normal", "norm_policy"],
+parser.add_argument("--action_dist", type=str, choices=["tanh_normal", "norm_policy", "diag_policy"],
                     default="tanh_normal")
 args = parser.parse_args()
 
@@ -31,6 +31,7 @@ config.task = "dmc_walker_walk"
 config.action_repeat = 2
 config.time_limit = 1000
 config.logdir = args.logdir
+config.action_dist = args.action_dist
 
 if config.gpu_growth:
     for gpu in tf.config.experimental.list_physical_devices('GPU'):
